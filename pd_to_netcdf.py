@@ -5,12 +5,13 @@ Created on Thu Apr 13 14:35:49 2017
 @author: wpreimes
 """
 
-
+from __future__ import print_function
 #Import landgrid
 import types
 
 import warnings
 import pygeogrids.netcdf as nc
+from pygeogrids.grids import BasicGrid
 import os
 import rsdata.root_path as root
 import numpy as np
@@ -20,6 +21,30 @@ from netCDF4 import Dataset,date2num
 import matplotlib.pyplot as plt
 from HomogeneityTesting.import_data import QDEGdata_M
 
+def get2Dpos(gpis,globalgrid,landgrid):
+    grid_points=globalgrid.get_grid_points()
+    lats=np.unique(grid_points[2])[::-1]
+    lons=np.unique(grid_points[1])
+    lon,lat=landgrid.gpi2lonlat(gpis)
+    y=datamask(lons,lon)
+    x=datamask(lats,lat)
+    return x,y
+
+def globalCellgrid():
+
+    # symettrical grid
+    lon_res = 0.25
+    lat_res = 0.25
+    offs_h=lon_res/2.
+    offs_v=lat_res/2.
+    # create meshgrid
+    lon, lat = np.meshgrid(
+        np.arange(-180+offs_h, 180-offs_h , lon_res),
+        np.arange(-90+offs_v, 90-offs_v , lat_res)
+    )
+
+    return BasicGrid(lon.flatten(), lat.flatten()).to_cell_grid(cellsize=5.)    
+    
 def datamask(x,y):
     index = np.argsort(x)
     sorted_x = x[index]
@@ -32,9 +57,7 @@ def datamask(x,y):
     return result
 
 def create_cellfile_name(gpi,grid):
-    
     #Returns filename (form:cellnumber.nc) and cell for passed gpi in passed grid
-    
     grid_points=grid.get_grid_points()
     gpi_index = np.where(grid_points[0]==gpi)[0][0]
     cell=grid_points[3][gpi_index]
@@ -46,7 +69,7 @@ def create_cellfile_name(gpi,grid):
     return cell,file_pattern  
 
 
-#TODO: merge these 2 functions to 1
+
 def update_time_var(ncfile,time,data,name,idx,meta=None):
     
     calendar = 'standard'
@@ -103,52 +126,68 @@ def update_time_var(ncfile,time,data,name,idx,meta=None):
 
 
 
-def update_loc_var(ncfile,data,name,idx,meta=None):
+def update_loc_var(ncfile,data,name,grid,idx):
     
-    if name in ncfile.dimensions.keys():
-        dimension=[ncfile.dimensions[name]]
-        size=dimension[0].size
-    elif name == 'location_id':
-        dimension=[ncfile.dimensions['locations']]
-        size=dimension[0].size 
-    elif  u'lat' and u'lon' in ncfile.dimensions:
-        dimension=[ncfile.dimensions[u'lat'],ncfile.dimensions[u'lon']]
-        size=dimension[0].size*dimension[1].size
-    else:
-        dimension=[ncfile.dimensions['locations']]
-        size=dimension[0].size
-
     if name in ncfile.variables.keys():
+        contt=ncfile.variables[name][:]
         if idx!=None:
-            contt=ncfile.variables[name][:]
-            if data.size==1:
-                contt[idx]=data
+            if contt.ndim==2:
+                x,y=get2Dpos(idx,grid[0],grid[1])
+                contt[x,y]=data
             else:
-                for i in idx:
-                    contt[i]=data[i]
+                contt[idx]=data
+            '''
+            if data.size==1:
+                if contt.ndim==2:
+                    x,y=get2Dpos(idx,grid[0],grid[1])
+                    contt[x,y]=data
+                else:
+                    contt[idx]=data
+            else:
+                if contt.ndim==2:
+                    x,y=get2Dpos(idx,grid[0],grid[1])
+                    contt[x,y]=data
+                else:
+                    contt[:idx.size]=data
+            '''
         else:
             contt=data
         ncfile.variables[name][:]=contt
     else:
+        if name in ncfile.dimensions.keys():
+            dimension=[ncfile.dimensions[name]]
+            dimension_size=dimension[0].size
+        elif name == 'location_id':
+            dimension=[ncfile.dimensions['locations']]
+            dimension_size=dimension[0].size 
+        elif  u'lat' and u'lon' in ncfile.dimensions:
+            dimension=[ncfile.dimensions[u'lat'],ncfile.dimensions[u'lon']]
+            dimension_size=dimension[0].size*dimension[1].size
+        else:
+            dimension=[ncfile.dimensions['locations']]
+            dimension_size=dimension[0].size
+        #If variable does not exist, create it with correct size and retry
         try:
             if isinstance(data, str):
                 dtype=str                
-                contt=np.array(['']*size,dtype=object)
+                contt=np.array(['']*dimension_size,dtype=object)
             else:
-                contt=np.full(size,np.nan)
-                dtype=np.asarray(data).dtype
+                contt=np.full(dimension_size,np.nan)
+                if np.asarray(data).dtype == int:
+                    dtype=float
+                else:
+                    dtype=np.asarray(data).dtype
             ncvar=ncfile.createVariable(varname=name,
-                                    datatype=dtype,
-                                    dimensions=tuple([dim.name for dim in dimension]),
-                                    zlib=False)
+                                        datatype=dtype,
+                                        dimensions=tuple([dim.name for dim in dimension]),
+                                        zlib=False)
             ncvar[:]=contt
         except Exception:
             print('Cannot save data for %s to file'%name)
         
-        if meta:
-            ncvar.setncatts(meta)
+
         
-        update_loc_var(ncfile,data,name,idx,meta) 
+        update_loc_var(ncfile,data,name,grid,idx) 
         
         
 
@@ -156,8 +195,8 @@ def fill_file(ncfile,grid,cell,gpi,dataframe,file_meta_dict,var_meta_dicts,index
           
     if istime:
         grid_points=grid.grid_points_for_cell(cell)
-        latitudes=grid_points[2]
-        longitudes=grid_points[1]
+        latitudes,longitudes=grid_points[2][::-1],grid_points[1]
+        locations=grid_points[0]
         if gpi and not index_col_name:
             time=dataframe.index
         elif gpi and index_col_name:
@@ -167,31 +206,35 @@ def fill_file(ncfile,grid,cell,gpi,dataframe,file_meta_dict,var_meta_dicts,index
         glob_pos=None
         
     else:
-
+        globgrid=globalCellgrid()
         grid_points=grid.get_grid_points()
-        latitudes=np.unique(grid_points[2])
-        longitudes=np.unique(grid_points[1])
+        global_grid_points=globgrid.get_grid_points()
+        
+        latitudes,longitudes=np.unique(global_grid_points[2])[::-1],np.unique(global_grid_points[1])
         locations=grid_points[0]
         if index_col_name:
             locs=dataframe[index_col_name]
         else:
             locs=dataframe.index
+        #glob_pos contains the indices of points to process in the overall grid
+        pos=datamask(np.array(locations),np.array(locs))
             
-    n_gpis=grid_points[0].size
+    n_gpis=locations.size
     
-    #Create 2 data dimensions 
+    #Create data dimensions for Time series and global image
     if not ncfile.dimensions:
         ncfile.createDimension(dimname='locations',size=n_gpis)
-        ncfile.createDimension(dimname=u'time',size=None) 
-        if not istime:
+        if istime:
+            ncfile.createDimension(dimname=u'time',size=None) 
+        else:
             ncfile.createDimension(dimname='lat',size=latitudes.size)
             ncfile.createDimension(dimname='lon',size=longitudes.size)
     #TODO: Add Metadata for netcdf file to dict
     if not ncfile.ncattrs():
         meta_dict={'geospatial_lon_min':longitudes[0],
                    'geosptial_lon_max':longitudes[-1],
-                   'geospatial_lat_min':latitudes[0],
-                   'geospatial_lat_max':latitudes[-1],
+                   'geospatial_lat_min':latitudes[-1],
+                   'geospatial_lat_max':latitudes[0],
                    'id':cell,
                    'date_created':datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         if file_meta_dict:
@@ -202,12 +245,14 @@ def fill_file(ncfile,grid,cell,gpi,dataframe,file_meta_dict,var_meta_dicts,index
     #Create variable for locations and add value
     #GPI, LAT, LON werden beim erstellen immer gefüllt je nach grid unabhängig vom GPI
     #Statt None: gpi_index: Nur für den prozessierten gpi werden idx,lat,lon ins file gespeichert
-    glob_pos=datamask(np.array(locations),np.array(locs))
-    update_loc_var(ncfile,locations,u'location_id',glob_pos,meta=None)
+    meta={'long_name':'Location Index','standard_name':'GPI','valid_range':'[0 Grid Dependant'}
+    update_loc_var(ncfile,locations,u'location_id',grid,pos)
     meta={'units':'degrees_east','long_name':'location longitude','standard_name':'longitude','valid_range':'[-180. 180.]'}
-    update_loc_var(ncfile,longitudes,u'lon',None,meta)
+    update_loc_var(ncfile,longitudes,u'lon',grid,None)
+    ncfile.variables[u'lon'].setncatts(meta)
     meta={'units':'degrees_north','long_name':'location latitude','standard_name':'latitude','valid_range':'[-90. 90.]'}
-    update_loc_var(ncfile,latitudes,u'lat',None,meta)
+    update_loc_var(ncfile,latitudes,u'lat',grid,None)
+    ncfile.variables[u'lat'].setncatts(meta)
 
                
     if istime==True:
@@ -225,18 +270,15 @@ def fill_file(ncfile,grid,cell,gpi,dataframe,file_meta_dict,var_meta_dicts,index
                 
     else:
         for i,var in enumerate(dataframe.columns.values):
-            for gpi in locs.values:
-                gpi_index = np.where(grid_points[0]==gpi)[0][0]
-                glob_pos=datamask(np.array(locations),gpi)
-                update_loc_var(ncfile,dataframe.ix[gpi][var],var)
+            glob_pos=datamask(global_grid_points[0],locs.values)
+            update_loc_var(ncfile,dataframe[var].values,var,[globgrid,grid],glob_pos)
             try:
                 ncfile.variables[var].setncatts(var_meta_dicts[var])
             except KeyError:
-                #TODO: Make more useful auto meta data
+                ##TODO: Make more useful auto meta data
                 var_meta_auto={'name':var,'info':'Automatically generated meta data'}
                 ncfile.variables[var].setncatts(var_meta_auto)
-
-
+                
 
 
 def df_to_netcdf(dataframe,
@@ -293,55 +335,44 @@ def df_to_netcdf(dataframe,
         if gpi:
             istime=True
         else:
-            raise Exception, 'Found time data in pandas object, select GPI!'
+            raise Exception, 'Found time data in pandas object, select a GPI!'
     elif isinstance(index_col, pd.Int64Index):
+        if gpi:
+            raise Exception, 'Found GPI data in dataframe, select GPI=None and provide GP index as dataframe index'
         istime=False
     else:
-        raise Exception, 'Index Column must either be datetime format or int64 (GPIs)'
+        raise Exception, 'Index Column must either be datetime format for time series or int64 to process multiple GPIs'
     
-    grid=nc.load_grid(os.path.join(root.r,'Datapool_processed','GLDAS','GLDAS_NOAH025_3H.020',
-    'ancillary','GLDASv2_025_land_grid.nc'))
+    if istime==False:
+        gpi=index_col.values
 
-        
-    if gpi!=None and (istime==True or gpi[0]==0):
-        try:
-            if gpi.__len__()==2:
-                gpi, _= grid.find_nearest_gpi(gpi[0],gpi[1])
-            if gpi[0]==0:
-                np.delete(gpi,0)
-        except Exception:
-            pass
-        
-        #Find cell and create filename for given gpi
-        if not filename:
-            cell,filename=create_cellfile_name(gpi,grid)
-        else: 
-            cell,filename='global',filename
-        
-        #Create or open netcdf cell file
-        if os.path.isfile(os.path.join(path,filename+'.nc')) and overwrite==False:
-            ncfile=Dataset(os.path.join(path,filename+'.nc'), "a", format="NETCDF4")
-        else:
-            ncfile=Dataset(os.path.join(path,filename+'.nc'), "w", format="NETCDF4")
-        try:
-            fill_file(ncfile,grid,cell,gpi,dataframe,file_meta_dict,var_meta_dicts,index_col_name,istime)
-        except Exception:
-            #TODO: handle the case that no metadata was passed
-            #print('Error during filling file %s'%filename)
-            pass
-        ncfile.close() 
-    elif gpi==None and istime==False:
-        gpi=np.append(0,index_col.values)
-        df_to_netcdf(dataframe,path,index_col_name,gpi,filename,file_meta_dict,var_meta_dicts,overwrite)
-    else:
-        raise Exception, 'DataFrame cannot be saved to NetCDF, check index, gpi and filename input'
+    grid=nc.load_grid(os.path.join(root.r,'Datapool_processed','GLDAS','GLDAS_NOAH025_3H.020',
+                                       'ancillary','GLDASv2_025_land_grid.nc'))
     
+    #Find cell and create filename for given gpi
+    if not filename:
+        cell,filename=create_cellfile_name(gpi,grid)
+    else: 
+        cell,filename='global',filename
+    
+    #Create or open netcdf cell file
+    if os.path.isfile(os.path.join(path,filename+'.nc')) and overwrite==False:
+        ncfile=Dataset(os.path.join(path,filename+'.nc'), "a", format="NETCDF4")
+    else:
+        ncfile=Dataset(os.path.join(path,filename+'.nc'), "w", format="NETCDF4")
+    try:
+        fill_file(ncfile,grid,cell,gpi,dataframe,file_meta_dict,var_meta_dicts,index_col_name,istime)
+    except Exception:
+        #TODO: handle the case that no metadata was passed
+        #print('Error during filling file %s'%filename)
+        pass
+    ncfile.close() 
+            
     
 
         
   
 def gotest(testtype):
-
     #TODO: The variable-meta-dict is not good
     gpi_file=r"H:\workspace\HomogeneityTesting\csv\pointlist_United_457_quarter.csv"
     df=pd.read_csv(gpi_file,index_col=0)
@@ -364,19 +395,17 @@ def gotest(testtype):
                          overwrite=False)
                          
     elif testtype=='points':
-        dataframe_gpi=pd.read_csv(r"H:\workspace\HomogeneityTesting\output\v22\DF_Points_merra2_2011-10-01_2012-07-01_2015-05-01.csv",index_col=0)
-        dataframe_gpi=dataframe_gpi[1:1000]
         
-        var1_meta={'longname':'Latitude','units':'degree'}        
-        var2_meta={'longname':'Break Test Class','units':'class','additional info':'awesome!'}
+        dataframe_gpi=pd.read_csv(r"H:\workspace\HomogeneityTesting\output\global_merra2_cci22D\DF_Points_merra2_1998-01-01_2002-07-01_2007-01-01.csv",index_col=0)
         
-        df_to_netcdf(dataframe=dataframe_gpi[['h_all','h_WK','h_FK']],
+        df_to_netcdf(dataframe=dataframe_gpi[['h_all','h_FK','h_WK']],
                      path=r'D:\users\wpreimes\datasets\ncwriter\newfiles',
                      filename='testfile',
                      gpi=None,
                      index_col_name=None,
                      file_meta_dict={'metainfo': 'value','metainfo2':'value2'},
-                     var_meta_dicts={'lat':var1_meta,'lon':var2_meta},
+                     var_meta_dicts={'lat':{'longname':'Latitude','units':'degree'},
+                                     'h_all':{'longname':'Break Test Class','units':'class','additional info':'awesome!'}},
                      overwrite=False)
     else:
         print("use gotest('time') or gotest(points) for testing this script")
