@@ -68,63 +68,104 @@ def create_cellfile_name(gpi,grid):
         
     return cell,file_pattern  
 
-
-
-def update_time_var(ncfile,time,data,name,idx,meta=None):
-    
+def update_time(ncfile,time,overwrite):     
     calendar = 'standard'
     units = 'days since 1858-11-17 00:00'
-    loc_size=ncfile.dimensions['locations'].size
     
-    nctime=date2num(time.tolist(),units,calendar)
-    if data.size != time.size:
-        raise Exception, 'Number of time values and variable values do not match'
+    nctime=date2num(time.tolist(),units,calendar)  
     
-    #TODO: Shorten this
     if u'time' in ncfile.variables.keys():
-        contt=ncfile.variables[u'time'][:]
-        if any(contt==False):
-            raise Exception, 'Time period for variable in file does not match time period from dataframe'
+        
+        
+        if np.isnan(ncfile.variables['time'][:]).all():
+            overwrite=True
+            ncfile.variables['time'][:]=nctime
+
+        #append new time data to old time data (if exists)
+        data_selection={'overwrite':overwrite}
+        old_values=ncfile.variables[u'time'][:]
+        
+        if overwrite==True:
+            data_selection['add_values_mask']=np.in1d(nctime,old_values,invert=True) 
+            data_selection['old_values_mask']=[True]*ncfile.dimensions['time'].size
+            nctime=np.ma.masked_array(nctime,data_selection['add_values_mask'])
+            old_values=np.ma.masked_array(old_values,data_selection['old_values_mask'])
+            merge=np.unique(np.concatenate((old_values.compressed(),nctime.compressed())))
+    
+        if overwrite==False:
+            #KEEP OLD VALUES; ADD VALUES THAT ARE NOT IN TIME YET
+            data_selection['add_values_mask']=np.in1d(nctime,old_values,invert=False)
+            data_selection['old_values_mask']=[False]*ncfile.dimensions['time']  
+            nctime=np.ma.masked_array(nctime,data_selection['add_values_mask']) #New Values which are NOT to be replaced by old ones, values for which no data available yet
+                      #TODO Es stimmen die Größen der Maske für die alten Werte nicht mit den Übergebenen alten werten für die vars Überein
+            old_values=np.ma.masked_array(old_values,data_selection['old_values_mask'])            
+            merge=np.unique(np.concatenate((old_values.compressed(),nctime.compressed())))
+            data_selection['old_values_mask']=[False]*ncfile.dimensions['time']  
+            
+            
+        
+        
+        sort_order=np.argsort(merge)
+        contt=merge[sort_order]
+        if nctime.compressed().size!=0:
+            ncfile.variables['time'][:]=contt
+        
+        data_selection['order']=sort_order
+        
+        return data_selection
+        
     else:
         tvar=ncfile.createVariable(varname=u'time',
                                     datatype=nctime.dtype,
                                     dimensions=(u'time',),
                                     zlib=False)
-        #ncvar.setncatts({'units':})
-        #contt=np.full(size,np.nan)
-        contt=nctime
-        tvar[:]=np.array(contt)
-        tvar.setncatts({'units':'days since 1858-11-17 00:00:00','long_name':'time of measurement','standard_name':'time'})
         
+        tvar[:]=np.full(nctime.size,np.nan)
+        
+        
+        return update_time(ncfile,time,overwrite)
+    
+    
+
+
+def update_time_var(ncfile,new_data_dict,data,name,idx):
+
     if name in ncfile.variables.keys():
+        #Old Values werden nicht gebraucht, new values mask beschreibt wo neu Zeitwerte hinzugeommen sind
+        #im Prinzip sind einfach alle neuen Werte zu übernehmen, falls die Anzahl gleich der Zeitwerte ist,
+        #ansonsten müssen für Zeitwerte, die nicht für die New Values gelten, Nans stehen (OLD VALUES MASK == False???)
+        old_contt=np.ma.masked_array(ncfile.variables[name][:][idx],new_data_dict['old_values_mask'])
+        new_contt=np.ma.masked_array(data.values,new_data_dict['add_values_mask'])
+        
+        merged=np.concatenate((old_contt.compressed(),new_contt.compressed()))[new_data_dict['order']]
+        
         contt=ncfile.variables[name][:]
-        contt[idx]=data
+        contt[idx]=merged
         ncfile.variables[name][:]=contt
+        
 
     else:
         try:
+            loc_size=ncfile.dimensions['locations'].size
             if isinstance(data, str):
                 dtype=object
-                contt=[['']*data.size]*loc_size
+                contt=np.empty((loc_size,data.size,))
+                contt[:]=''
             else:
                 dtype=np.asarray(data).dtype
-                contt=[[np.nan]*data.size]*loc_size
-
+                #contt=[[np.nan]*data.size]*loc_size
+                contt=np.empty((loc_size,data.size,))
+                contt[:]=np.nan
             ncvar=ncfile.createVariable(varname=name,
                                         datatype=dtype,
                                         dimensions=(u'locations',u'time'),
                                         zlib=False)
-    
+            ncvar[:]=np.array(contt)
         except Exception:
             print('Cannot save data for %s to file'%name)
         
-        contt[idx]=data.tolist()
-        dataarray=np.array(contt,dtype=dtype)
-        ncvar[:]=dataarray
+        return update_time_var(ncfile,new_data_dict,data,name,idx)
         
-        if meta: ncvar.setncatts(meta)
-
-
 
 def update_loc_var(ncfile,data,name,grid,idx):
     
@@ -136,20 +177,6 @@ def update_loc_var(ncfile,data,name,grid,idx):
                 contt[x,y]=data
             else:
                 contt[idx]=data
-            '''
-            if data.size==1:
-                if contt.ndim==2:
-                    x,y=get2Dpos(idx,grid[0],grid[1])
-                    contt[x,y]=data
-                else:
-                    contt[idx]=data
-            else:
-                if contt.ndim==2:
-                    x,y=get2Dpos(idx,grid[0],grid[1])
-                    contt[x,y]=data
-                else:
-                    contt[:idx.size]=data
-            '''
         else:
             contt=data
         ncfile.variables[name][:]=contt
@@ -185,13 +212,11 @@ def update_loc_var(ncfile,data,name,grid,idx):
         except Exception:
             print('Cannot save data for %s to file'%name)
         
-
-        
-        update_loc_var(ncfile,data,name,grid,idx) 
+        return update_loc_var(ncfile,data,name,grid,idx) 
         
         
 
-def fill_file(ncfile,grid,cell,gpi,dataframe,file_meta_dict,var_meta_dicts,index_col_name=None,istime=True):
+def fill_file(ncfile,grid,cell,gpi,dataframe,file_meta_dict,var_meta_dicts,index_col_name=None,overwrite=False,istime=True):
           
     if istime:
         grid_points=grid.grid_points_for_cell(cell)
@@ -203,6 +228,7 @@ def fill_file(ncfile,grid,cell,gpi,dataframe,file_meta_dict,var_meta_dicts,index
             time=dataframe[index_col_name]
         else: 
             raise Exception, 'To save time series data define GPI and time column (if not DF index)'
+        pos=None
         glob_pos=None
         
     else:
@@ -257,17 +283,24 @@ def fill_file(ncfile,grid,cell,gpi,dataframe,file_meta_dict,var_meta_dicts,index
                
     if istime==True:
         gpi_index = np.where(grid_points[0]==gpi)[0][0]
+        new_data_dict=update_time(ncfile,time,overwrite)
+        ncfile.variables['time'].setncatts({'units':'days since 1858-11-17 00:00:00',
+                                            'long_name':'time of measurement',
+                                            'standard_name':'time'})
         for i,var in enumerate(dataframe.columns.values):
+            
         #Create vaiable for time and other variables in dataframe
-            update_time_var(ncfile,time,dataframe[var],var,gpi_index)
+            update_time_var(ncfile,new_data_dict,dataframe[var],var,gpi_index)
             try:
+                ncfile.variables[var].setncatts({'units':'days since 1858-11-17 00:00:00',
+                                                 'long_name':'time of measurement',
+                                                 'standard_name':'time'})
                 ncfile.variables[var].setncatts(var_meta_dicts[var])
             except KeyError:
                 #Catch if no metadata was specified and create some trivial one
                 #TODO: Make more useful auto meta data
                 var_meta_auto={'name':var,'info':'Automatically generated meta data'}
-                ncfile.variables[var].setncatts(var_meta_auto)
-                
+                ncfile.variables[var].setncatts(var_meta_auto)  
     else:
         for i,var in enumerate(dataframe.columns.values):
             glob_pos=datamask(global_grid_points[0],locs.values)
@@ -356,12 +389,12 @@ def df_to_netcdf(dataframe,
         cell,filename='global',filename
     
     #Create or open netcdf cell file
-    if os.path.isfile(os.path.join(path,filename+'.nc')) and overwrite==False:
+    if os.path.isfile(os.path.join(path,filename+'.nc')):
         ncfile=Dataset(os.path.join(path,filename+'.nc'), "a", format="NETCDF4")
     else:
         ncfile=Dataset(os.path.join(path,filename+'.nc'), "w", format="NETCDF4")
     try:
-        fill_file(ncfile,grid,cell,gpi,dataframe,file_meta_dict,var_meta_dicts,index_col_name,istime)
+        fill_file(ncfile,grid,cell,gpi,dataframe,file_meta_dict,var_meta_dicts,index_col_name,overwrite,istime)
     except Exception:
         #TODO: handle the case that no metadata was passed
         #print('Error during filling file %s'%filename)
@@ -374,13 +407,14 @@ def df_to_netcdf(dataframe,
   
 def gotest(testtype):
     #TODO: The variable-meta-dict is not good
-    gpi_file=r"H:\workspace\HomogeneityTesting\csv\pointlist_United_457_quarter.csv"
-    df=pd.read_csv(gpi_file,index_col=0)
-    ttime=['2007-07-01','2011-10-01','2012-07-01']
+
     if testtype=='time':
+        gpi_file=r"H:\workspace\HomogeneityTesting\csv\pointlist_United_457_quarter.csv"
+        df=pd.read_csv(gpi_file,index_col=0)
+        ttime=['2000-07-01','2011-10-01','2012-07-01']
         data=QDEGdata_M(products=['merra2','cci_22'])
-        for gpi in df.index.values:
-            
+        for i, gpi in enumerate(df.index.values):
+            print('Writing gpi %i of %i to netcdf'%(i,df.index.values.size))
             dataframe_time=data.read_gpi(gpi,ttime[0],ttime[1])
         
             var1_meta={'longname':'Soil Moisture','units':'kg/m^2'}
@@ -412,6 +446,6 @@ def gotest(testtype):
             
         
                          
-gotest('points')
+gotest('time')
     
     
