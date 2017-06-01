@@ -68,66 +68,7 @@ def create_cellfile_name(gpi,grid):
         
     return cell,file_pattern  
 
-'''
-def update_time(ncfile,time,overwrite):     
-    calendar = 'standard'
-    units = 'days since 1858-11-17 00:00'
-    
-    nctime=np.sort(date2num(time.tolist(),units,calendar))
-    
-    if u'time' in ncfile.variables.keys():
-        
-        DF_Time=pd.DataFrame()
-        
-    
-        if np.isnan(ncfile.variables['time'][:]).all():
-            overwrite=True
-            #ncfile.variables['time'][:]=nctime
-        
-        #append new time data to old time data (if exists)
-        old_values=ncfile.variables[u'time'][:]
-        
-        if overwrite==True:
-            #File mask: Time values in file time variable that are not needed for curent dataframe --> set True
-            #Frame mask: Time values that are not yet in the file and new for processsing the dataframe --> set False
-            if np.isnan(old_values).all():
-                ts_old=pd.Series()
-                ts_new=pd.Series(index=nctime,data=np.sort(nctime))
-                                    
-                DF_Time=pd.concat([DF_old,DF_new],axis=1)
-                pd.DataFrame(data={'file_values':np.sort(old_values),'file_mask':np.in1d(old_values,nctime,invert=True),
-                                           'frame_values':np.sort(nctime),'frame_mask':np.in1d(nctime,old_values,invert=False)}) #np.unique(np.concatenate((old_values,nctime))
-            else:
-                DF_Time=pd.DataFrame(data={'file_values':np.sort(old_values),'file_mask':np.in1d(old_values,nctime,invert=False),
-                                           'frame_values':np.sort(nctime),'frame_mask':np.in1d(nctime,old_values,invert=True)}) 
-        if overwrite==False:
-            DF_Time=pd.DataFrame(data={'file_values':np.sort(old_values),'file_mask':np.in1d(old_values,nctime,invert=False),
-                                       'frame_values':np.sort(nctime),'frame_mask':np.in1d(nctime,old_values,invert=True)}) #np.unique(np.concatenate((old_values,nctime))
-                                 
-        frame_values=DF_Time['frame_values'].where(DF_Time['frame_mask']==False).dropna()
-        file_values=DF_Time['file_values'].where(DF_Time['file_mask']==False).dropna()
-        
-        DF_Time['merged']=np.unique(np.concatenate((file_values,frame_values)))
-            
-        DF_Time['sort_order']=np.argsort(DF_Time['merged'].values)
-        contt=DF_Time['merged'].values[DF_Time['sort_order'].values]
-        if frame_values.size!=0:
-            ncfile.variables['time'][:]=contt
-        
-        DF_Time.index=DF_Time['merged']
-        return DF_Time
-        
-    else:
-        tvar=ncfile.createVariable(varname=u'time',
-                                    datatype=nctime.dtype,
-                                    dimensions=(u'time',),
-                                    zlib=False)
-        
-        tvar[:]=np.full(nctime.size,np.nan)
-        
-        
-        return update_time(ncfile,time,overwrite)
-'''   
+ 
     
 
 
@@ -181,8 +122,7 @@ def update_time_var(ncfile,time,dataframe,names,overwrite_gpi,idx):
         old_time=ncfile.variables[u'time'][:]
         old_data=contt[name]
         #if old_time != new_time:
-        
-        
+ 
         
         
         if any(np.isnan(old_time)):
@@ -231,52 +171,6 @@ def update_time_var(ncfile,time,dataframe,names,overwrite_gpi,idx):
         
         
         
-        '''
-        time_new=df_concat.index.values
-        data_new=np.full([contt.shape[0],new_time.size],np.nan)
-        data_new=df_concat[name].values
-        contt[]
-        '''
-        '''    
-        if any(ncfile.variables['time'][:]!=df_concat.index.values):
-            
-            time_file=ncfile.variables['time'][:]
-            time_frame=df_concat.index.values
-            time_only_file_mask=np.in1d(np.sort(time_file),np.sort(time_frame),invert=True)
-            
-            time_merge=np.append(time_file[time_only_file_mask],time_frame)
-            #time_help=np.append(np.array(['old'*time_file[time_only_file_mask].size])
-                                #np.array(['new'*]))
-            #time_order=np.argsort(time_merge
-            new_time=time_merge[time_order]
-            
-            data_file=contt[name]
-            
-            data_new[:,:time_frame.size]=df_concat
-            data_new=data_file[:,time_only_file_mask]
-            #data_new[]
-
-            data_frame=df_concat[name].values
-            
-            for name in ncfile
-        else:
-            contt[idx]=df_concat[name].values
-            #Zeit Variable erweitern
-            #if ncfile.variables['time'][:].size<df_concat.index.values.size:
-                
-            #extended_time=np.unique(np.append(ncfile.variables['time'][:],df_concat.index.values))
-            #Position der neuen Werte
-            #TODO: Alle anderen Variablen im File auf Länge der neuen Zeit anpassen
-            #ncfile.variables['time'][:]=
-        
-        #If time gets larger, also time dependant variables increase in size, with some random values,
-        #its prob best to avoid these automatic changes and change new values to nan
-        '''
-
-    #ncfile.variables[name][:]=contt
-        #Add new time to file
-        
-
 def update_loc_var(ncfile,data,name,grid,idx):
     
     if name in ncfile.variables.keys():
@@ -524,8 +418,8 @@ def gotest(testtype):
     if testtype=='time':
         gpi_file=r"H:\workspace\HomogeneityTesting\csv\pointlist_United_457_quarter.csv"
         df=pd.read_csv(gpi_file,index_col=0)
-        ttime=['2004-04-01','2005-10-01']
-        data=QDEGdata_D(products=['merra2','cci_31'])
+        ttime=['2000-04-01','2010-10-01']
+        data=QDEGdata_M(products=['merra2'])
         for i, gpi in enumerate(df.index.values):
             print('Writing gpi %i of %i to netcdf'%(i,df.index.values.size))
             dataframe_time=data.read_gpi(gpi,ttime[0],ttime[1])
