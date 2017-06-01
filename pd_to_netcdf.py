@@ -19,7 +19,7 @@ import pandas as pd
 from datetime import datetime
 from netCDF4 import Dataset,date2num
 import matplotlib.pyplot as plt
-from HomogeneityTesting.import_data import QDEGdata_M
+from HomogeneityTesting.import_data import QDEGdata_M, QDEGdata_D
 
 def get2Dpos(gpis,globalgrid,landgrid):
     grid_points=globalgrid.get_grid_points()
@@ -68,11 +68,12 @@ def create_cellfile_name(gpi,grid):
         
     return cell,file_pattern  
 
+'''
 def update_time(ncfile,time,overwrite):     
     calendar = 'standard'
     units = 'days since 1858-11-17 00:00'
     
-    nctime=date2num(time.tolist(),units,calendar)  
+    nctime=np.sort(date2num(time.tolist(),units,calendar))
     
     if u'time' in ncfile.variables.keys():
         
@@ -89,15 +90,22 @@ def update_time(ncfile,time,overwrite):
         if overwrite==True:
             #File mask: Time values in file time variable that are not needed for curent dataframe --> set True
             #Frame mask: Time values that are not yet in the file and new for processsing the dataframe --> set False
-            DF_Time=pd.DataFrame(data={'file_values':np.sort(old_values),'file_mask':np.in1d(old_values,nctime,invert=True),
-                                       'frame_values':np.sort(nctime),'frame_mask':np.in1d(nctime,old_values,invert=False)}) #np.unique(np.concatenate((old_values,nctime))
-                                
+            if np.isnan(old_values).all():
+                ts_old=pd.Series()
+                ts_new=pd.Series(index=nctime,data=np.sort(nctime))
+                                    
+                DF_Time=pd.concat([DF_old,DF_new],axis=1)
+                pd.DataFrame(data={'file_values':np.sort(old_values),'file_mask':np.in1d(old_values,nctime,invert=True),
+                                           'frame_values':np.sort(nctime),'frame_mask':np.in1d(nctime,old_values,invert=False)}) #np.unique(np.concatenate((old_values,nctime))
+            else:
+                DF_Time=pd.DataFrame(data={'file_values':np.sort(old_values),'file_mask':np.in1d(old_values,nctime,invert=False),
+                                           'frame_values':np.sort(nctime),'frame_mask':np.in1d(nctime,old_values,invert=True)}) 
         if overwrite==False:
             DF_Time=pd.DataFrame(data={'file_values':np.sort(old_values),'file_mask':np.in1d(old_values,nctime,invert=False),
                                        'frame_values':np.sort(nctime),'frame_mask':np.in1d(nctime,old_values,invert=True)}) #np.unique(np.concatenate((old_values,nctime))
                                  
-        frame_values=DF_Time['frame_values'].where(DF_Time['frame_mask']==True).dropna()
-        file_values=DF_Time['file_values'].where(DF_Time['file_mask']==True).dropna()
+        frame_values=DF_Time['frame_values'].where(DF_Time['frame_mask']==False).dropna()
+        file_values=DF_Time['file_values'].where(DF_Time['file_mask']==False).dropna()
         
         DF_Time['merged']=np.unique(np.concatenate((file_values,frame_values)))
             
@@ -106,6 +114,7 @@ def update_time(ncfile,time,overwrite):
         if frame_values.size!=0:
             ncfile.variables['time'][:]=contt
         
+        DF_Time.index=DF_Time['merged']
         return DF_Time
         
     else:
@@ -118,60 +127,154 @@ def update_time(ncfile,time,overwrite):
         
         
         return update_time(ncfile,time,overwrite)
+'''   
     
+
+
+def update_time_var(ncfile,time,dataframe,names,overwrite_gpi,idx):
     
+    calendar = 'standard'
+    units = 'days since 1858-11-17 00:00'
+    
+    new_time=np.sort(date2num(time.tolist(),units,calendar))
+    
+    contt={}
+    contt_time=np.array([])
 
+    
+    if u'time' not in ncfile.variables.keys():
 
-def update_time_var(ncfile,DF_Time,data,name,idx):
-
-    if name in ncfile.variables.keys():
-        #Old Values werden nicht gebraucht, new values mask beschreibt wo neu Zeitwerte hinzugeommen sind
-        #im Prinzip sind einfach alle neuen Werte zu übernehmen, falls die Anzahl gleich der Zeitwerte ist,
-        #ansonsten müssen für Zeitwerte, die nicht für die New Values gelten, Nans stehen (OLD VALUES MASK == False???)
-              
-
+        tvar=ncfile.createVariable(varname=u'time',
+                              datatype=new_time.dtype,
+                              dimensions=(u'time',),
+                              zlib=False)
         
-        #Overwriting existing data:
-        DF_Var=pd.DataFrame(index=ncfile.variables['time'][:],
-                            data={'file_values':ncfile.variables[name][:][idx],
-                                  'frame_values':data.values})  
-        '''
-        if new_data_dict['overwrite']==False:
-            #If overwrite is not selected, keep data for existing times and just add new ones
-            old_contt=np.ma.masked_array(ncfile.variables[name][:][idx],new_data_dict['old_values_mask'])
-            new_contt=np.ma.masked_array(data.values,new_data_dict['add_values_mask'])
-        if new_data_dict['overwrite']==True:
-            pass
-            #TODO
-        '''
-        #merged=np.concatenate((old_contt.compressed(),new_contt.compressed()))[new_data_dict['order']]
-        
-        contt=ncfile.variables[name][:]
-        contt[idx]=merged
-        ncfile.variables[name][:]=contt
-        
-
-    else:
-        try:
+        tvar[:]=np.full(new_time.size,np.nan)
+    
+    for name in names:
+          
+        if name not in ncfile.variables.keys():
+    
             loc_size=ncfile.dimensions['locations'].size
-            if isinstance(data, str):
+            if isinstance(dataframe[name], str):
                 dtype=object
-                contt=np.empty((loc_size,data.size,))
+                contt=np.empty((loc_size,dataframe[name].size,))
                 contt[:]=''
             else:
-                dtype=np.asarray(data).dtype
-                #contt=[[np.nan]*data.size]*loc_size
-                contt=np.empty((loc_size,data.size,))
-                contt[:]=np.nan
+                dtype=np.asarray(dataframe[name]).dtype
+    
+                #contt=np.empty((loc_size,data.size,))
+                #contt[:]=np.nan
             ncvar=ncfile.createVariable(varname=name,
-                                        datatype=dtype,
-                                        dimensions=(u'locations',u'time'),
-                                        zlib=False)
-            ncvar[:]=np.array(contt)
-        except Exception:
-            print('Cannot save data for %s to file'%name)
+                                  datatype=dtype,
+                                  dimensions=(u'locations',u'time'),
+                                  zlib=False
+                                  )
+            #ncvar[:]=np.array(contt)
+    
+        contt.update({name:ncfile.variables[name][:]})  
         
-        return update_time_var(ncfile,new_data_dict,data,name,idx)
+    for name in names:
+
+        new_data=dataframe[name].values             
+            
+        old_time=ncfile.variables[u'time'][:]
+        old_data=contt[name]
+        #if old_time != new_time:
+        
+        
+        
+        
+        if any(np.isnan(old_time)):
+            old_time=np.array([])
+            old_data=np.array([])
+            df_old=pd.DataFrame(index=[],data=[],columns=range(contt[name].shape[0]))
+        else:
+            #df_old=pd.DataFrame(old_time,np.array([data for data in old_data]).transpose())
+            df_old=pd.DataFrame(index=old_time,data=old_data.transpose())
+        
+        #df_old=pd.DataFrame(index=old_time,data={name:old_data})
+        df_new=pd.DataFrame(index=new_time,data=new_data,columns=[idx])
+        
+        overlap_ind=df_old.index.intersection(df_new.index)
+    
+        if not overwrite_gpi:
+            #Für den atuellen GPI werden die vorhandenen Zeitabhängigen Daten ausgelesen,
+            #und neue Zeit-Daten hinzugefügt, vorhandene Daten werden ÜBERSCHRIEBEN.
+            ts_old=df_old[idx].drop(overlap_ind)
+        if overwrite_gpi:
+            ts_old=pd.DataFrame(index=[],data={name:[]})
+            #Für den aktuellen GPI werden die vorhandenen Zeitabhängigen Daten GELÖSCHT (Zeit selbst nicht)
+            #und durch (wenige) neue Werte ersetzt.
+        
+        if ts_old.index.intersection(df_new.index).size!=0:
+            raise Exception, 'Overlapping Old/New Data Error'
+        
+        #df_old[idx]=ts_old
+        ts_concat=pd.concat([ts_old,df_new[idx]])
+        df_concat=pd.DataFrame(index=ts_concat.index,data=df_old)
+        df_concat[idx]=ts_concat
+        #df_concat[idx]=ts_concat
+        contt[name]=df_concat.as_matrix().transpose()
+        
+        if contt_time.size==0:
+            contt_time=df_concat.index.values
+        if not all(np.in1d(df_concat.index.values,contt_time))==True:
+            raise Exception, 'Time Error!!!'
+
+    if ncfile.variables['time'][:].size!=contt_time.size or any(ncfile.variables['time'][:]!=contt_time):
+        print('Update Time Variable')
+        ncfile.variables['time'][:]=df_concat.index.values
+            
+    for name in names:
+        ncfile.variables[name][:]=contt[name]        
+        
+        
+        
+        '''
+        time_new=df_concat.index.values
+        data_new=np.full([contt.shape[0],new_time.size],np.nan)
+        data_new=df_concat[name].values
+        contt[]
+        '''
+        '''    
+        if any(ncfile.variables['time'][:]!=df_concat.index.values):
+            
+            time_file=ncfile.variables['time'][:]
+            time_frame=df_concat.index.values
+            time_only_file_mask=np.in1d(np.sort(time_file),np.sort(time_frame),invert=True)
+            
+            time_merge=np.append(time_file[time_only_file_mask],time_frame)
+            #time_help=np.append(np.array(['old'*time_file[time_only_file_mask].size])
+                                #np.array(['new'*]))
+            #time_order=np.argsort(time_merge
+            new_time=time_merge[time_order]
+            
+            data_file=contt[name]
+            
+            data_new[:,:time_frame.size]=df_concat
+            data_new=data_file[:,time_only_file_mask]
+            #data_new[]
+
+            data_frame=df_concat[name].values
+            
+            for name in ncfile
+        else:
+            contt[idx]=df_concat[name].values
+            #Zeit Variable erweitern
+            #if ncfile.variables['time'][:].size<df_concat.index.values.size:
+                
+            #extended_time=np.unique(np.append(ncfile.variables['time'][:],df_concat.index.values))
+            #Position der neuen Werte
+            #TODO: Alle anderen Variablen im File auf Länge der neuen Zeit anpassen
+            #ncfile.variables['time'][:]=
+        
+        #If time gets larger, also time dependant variables increase in size, with some random values,
+        #its prob best to avoid these automatic changes and change new values to nan
+        '''
+
+    #ncfile.variables[name][:]=contt
+        #Add new time to file
         
 
 def update_loc_var(ncfile,data,name,grid,idx):
@@ -223,7 +326,7 @@ def update_loc_var(ncfile,data,name,grid,idx):
         
         
 
-def fill_file(ncfile,grid,cell,gpi,dataframe,file_meta_dict,var_meta_dicts,index_col_name=None,overwrite=False,istime=True):
+def fill_file(ncfile,grid,cell,gpi,dataframe,file_meta_dict,var_meta_dicts,index_col_name=None,overwrite_gpi=False,istime=True):
           
     if istime:
         grid_points=grid.grid_points_for_cell(cell)
@@ -290,24 +393,27 @@ def fill_file(ncfile,grid,cell,gpi,dataframe,file_meta_dict,var_meta_dicts,index
                
     if istime==True:
         gpi_index = np.where(grid_points[0]==gpi)[0][0]
-        DF_Time=update_time(ncfile,time,overwrite)
-        ncfile.variables['time'].setncatts({'units':'days since 1858-11-17 00:00:00',
-                                            'long_name':'time of measurement',
-                                            'standard_name':'time'})
+        
+        update_time_var(ncfile,time,dataframe,dataframe.columns.values.tolist(),overwrite_gpi,gpi_index)
+        
         for i,var in enumerate(dataframe.columns.values):
-            
         #Create vaiable for time and other variables in dataframe
-            update_time_var(ncfile,DF_Time,dataframe[var],var,gpi_index)
             try:
-                ncfile.variables[var].setncatts({'units':'days since 1858-11-17 00:00:00',
-                                                 'long_name':'time of measurement',
-                                                 'standard_name':'time'})
+                ncfile.variables[var].setncatts({'units':'units of the variable',
+                                                 'long_name':'name of the variable',
+                                                 'standard_name':'var name'})
                 ncfile.variables[var].setncatts(var_meta_dicts[var])
             except KeyError:
                 #Catch if no metadata was specified and create some trivial one
                 #TODO: Make more useful auto meta data
                 var_meta_auto={'name':var,'info':'Automatically generated meta data'}
                 ncfile.variables[var].setncatts(var_meta_auto)  
+                
+        ncfile.variables['time'].setncatts({'units':'days since 1858-11-17 00:00:00',
+                                    'long_name':'time of measurement',
+                                    'standard_name':'time'})
+                                    
+
     else:
         for i,var in enumerate(dataframe.columns.values):
             glob_pos=datamask(global_grid_points[0],locs.values)
@@ -328,7 +434,7 @@ def df_to_netcdf(dataframe,
                  filename=None,
                  file_meta_dict=None,
                  var_meta_dicts=None,
-                 overwrite=False):
+                 overwrite_gpi=False):
     
     '''
     Writes Pandas Dataframe to netCDF file using lat/lon for the given gpi
@@ -401,7 +507,7 @@ def df_to_netcdf(dataframe,
     else:
         ncfile=Dataset(os.path.join(path,filename+'.nc'), "w", format="NETCDF4")
     try:
-        fill_file(ncfile,grid,cell,gpi,dataframe,file_meta_dict,var_meta_dicts,index_col_name,overwrite,istime)
+        fill_file(ncfile,grid,cell,gpi,dataframe,file_meta_dict,var_meta_dicts,index_col_name,overwrite_gpi,istime)
     except Exception:
         #TODO: handle the case that no metadata was passed
         #print('Error during filling file %s'%filename)
@@ -418,8 +524,8 @@ def gotest(testtype):
     if testtype=='time':
         gpi_file=r"H:\workspace\HomogeneityTesting\csv\pointlist_United_457_quarter.csv"
         df=pd.read_csv(gpi_file,index_col=0)
-        ttime=['2005-07-01','2011-10-01','2012-07-01']
-        data=QDEGdata_M(products=['merra2','cci_22'])
+        ttime=['2004-04-01','2005-10-01']
+        data=QDEGdata_D(products=['merra2','cci_31'])
         for i, gpi in enumerate(df.index.values):
             print('Writing gpi %i of %i to netcdf'%(i,df.index.values.size))
             dataframe_time=data.read_gpi(gpi,ttime[0],ttime[1])
@@ -433,7 +539,7 @@ def gotest(testtype):
                          index_col_name=None,
                          var_meta_dicts={'merra2':var1_meta,'cci_22':var2_meta},
                          gpi=gpi,
-                         overwrite=False)
+                         overwrite_gpi=False)
                          
     elif testtype=='points':
         
@@ -447,7 +553,7 @@ def gotest(testtype):
                      file_meta_dict={'metainfo': 'value','metainfo2':'value2'},
                      var_meta_dicts={'lat':{'longname':'Latitude','units':'degree'},
                                      'h_all':{'longname':'Break Test Class','units':'class','additional info':'awesome!'}},
-                     overwrite=False)
+                     overwrite_gpi=False)
     else:
         print("use gotest('time') or gotest(points) for testing this script")
             
