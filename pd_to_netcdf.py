@@ -52,9 +52,8 @@ def datamask(x,y):
     
     yindex = np.take(index, sorted_index, mode="clip")
     mask = x[yindex] != y
-    
-    result = np.ma.array(yindex, mask=mask)
-    return result
+ 
+    return np.ma.array(yindex, mask=mask)
 
 def create_cellfile_name(gpi,grid):
     #Returns filename (form:cellnumber.nc) and cell for passed gpi in passed grid
@@ -113,11 +112,20 @@ def update_time_var(ncfile,time,dataframe,names,overwrite_gpi,idx):
                                   )
             #ncvar[:]=np.array(contt)
     
+    for name in ncfile.variables.keys():        
+        if 'time' not in ncfile.variables[name].dimensions or name=='time':
+            continue
         contt.update({name:ncfile.variables[name][:]})  
         
-    for name in names:
-
-        new_data=dataframe[name].values             
+    for name in ncfile.variables.keys():
+        
+        if 'time' not in ncfile.variables[name].dimensions or name=='time':
+            continue
+        
+        if name not in names:
+            new_data=np.nan
+        else:    
+            new_data=dataframe[name].values             
             
         old_time=ncfile.variables[u'time'][:]
         old_data=contt[name]
@@ -138,20 +146,24 @@ def update_time_var(ncfile,time,dataframe,names,overwrite_gpi,idx):
         
         overlap_ind=df_old.index.intersection(df_new.index)
     
-        if not overwrite_gpi:
-            #Für den atuellen GPI werden die vorhandenen Zeitabhängigen Daten ausgelesen,
-            #und neue Zeit-Daten hinzugefügt, vorhandene Daten werden ÜBERSCHRIEBEN.
-            ts_old=df_old[idx].drop(overlap_ind)
-        if overwrite_gpi:
-            ts_old=pd.DataFrame(index=[],data={name:[]})
-            #Für den aktuellen GPI werden die vorhandenen Zeitabhängigen Daten GELÖSCHT (Zeit selbst nicht)
-            #und durch (wenige) neue Werte ersetzt.
-        
+        if name not in names:
+            ts_old=df_old[idx]
+            df_new=df_new.drop(overlap_ind)
+        else:
+            if not overwrite_gpi:
+                #Für den atuellen GPI werden die vorhandenen Zeitabhängigen Daten ausgelesen,
+                #und neue Zeit-Daten hinzugefügt, vorhandene Daten werden ÜBERSCHRIEBEN.
+                ts_old=df_old[idx].drop(overlap_ind)
+            if overwrite_gpi:
+                ts_old=pd.DataFrame(index=[],data={name:[]})
+                #Für den aktuellen GPI werden die vorhandenen Zeitabhängigen Daten GELÖSCHT (Zeit selbst nicht)
+                #und durch (wenige) neue Werte ersetzt.
+            
         if ts_old.index.intersection(df_new.index).size!=0:
             raise Exception, 'Overlapping Old/New Data Error'
         
         #df_old[idx]=ts_old
-        ts_concat=pd.concat([ts_old,df_new[idx]])
+        ts_concat=pd.concat([ts_old,df_new[idx]]).sort_index()
         df_concat=pd.DataFrame(index=ts_concat.index,data=df_old)
         df_concat[idx]=ts_concat
         #df_concat[idx]=ts_concat
@@ -323,6 +335,8 @@ def fill_file(ncfile,grid,cell,gpi,dataframe,file_meta_dict,var_meta_dicts,index
 
 def df_to_netcdf(dataframe,
                  path,
+                 target_grid=os.path.join(root.r,'Datapool_processed','GLDAS','GLDAS_NOAH025_3H.020',
+                                          'ancillary','GLDASv2_025_land_grid.nc'),
                  index_col_name=None,
                  gpi=None,
                  filename=None,
@@ -386,8 +400,7 @@ def df_to_netcdf(dataframe,
     if istime==False:
         gpi=index_col.values
 
-    grid=nc.load_grid(os.path.join(root.r,'Datapool_processed','GLDAS','GLDAS_NOAH025_3H.020',
-                                       'ancillary','GLDASv2_025_land_grid.nc'))
+    grid=nc.load_grid(target_grid)
     
     #Find cell and create filename for given gpi
     if not filename:
@@ -418,10 +431,11 @@ def gotest(testtype):
     if testtype=='time':
         gpi_file=r"H:\workspace\HomogeneityTesting\csv\pointlist_United_457_quarter.csv"
         df=pd.read_csv(gpi_file,index_col=0)
-        ttime=['2000-04-01','2010-10-01']
-        data=QDEGdata_M(products=['merra2'])
+        ttime=['2001-04-01','2002-10-01']
+        data=QDEGdata_D(products=['cci_31_passive'])
         for i, gpi in enumerate(df.index.values):
-            print('Writing gpi %i of %i to netcdf'%(i,df.index.values.size))
+            if i%100==0:
+                print('Writing gpi %i of %i to netcdf'%(i,df.index.values.size))
             dataframe_time=data.read_gpi(gpi,ttime[0],ttime[1])
         
             var1_meta={'longname':'Soil Moisture','units':'kg/m^2'}
